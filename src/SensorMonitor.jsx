@@ -402,42 +402,81 @@ const SensorMonitor = () => {
                     </div>
                 </div>
 
-                {/* 3. COMPASS */}
+                {/* 3. COMPASS + EMF (Redesigned) */}
                 <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
                             <Navigation className="w-5 h-5 text-purple-500" />
-                            <h2 className={`font-bold ${textClass}`}>COMPASS</h2>
+                            <h2 className={`font-bold ${textClass}`}>MAGNETIC & COMPASS</h2>
                         </div>
                         <button onClick={() => toggleInfo('mag')}><Info className={`w-4 h-4 ${textMutedClass}`} /></button>
                     </div>
 
                     {showInfo === 'mag' && (
                         <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
-                            Heading (North) and Magnetic Flux Density (EMF) if supported by hardware (Android).
+                            <p className="mb-2"><strong>Magnetic Field (EMF):</strong> Measures ambient magnetic flux in microteslas (µT).</p>
+                            <ul className="list-disc pl-4 mb-2">
+                                <li><strong>Green (&lt;40µT):</strong> Normal background.</li>
+                                <li><strong>Yellow (40-100µT):</strong> Elevated.</li>
+                                <li><strong>Red (&gt;100µT):</strong> High interference.</li>
+                            </ul>
+                            <p><strong>Compass:</strong> Points to magnetic North.</p>
                         </div>
                     )}
 
-                    <div className="flex items-center justify-between mb-4">
-                        <div>
-                            <p className={`text-4xl font-black ${textClass}`}>{Math.round(sensors.magnetometer.heading)}°</p>
-                            <p className={`text-lg font-bold text-purple-500 mt-1`}>{getCompassDirection(sensors.magnetometer.heading)}</p>
+                    {/* EMF / uT Section (Top Priority) */}
+                    <div className={`mb-6 p-3 rounded-lg ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
+                        <div className="flex justify-between items-end mb-2">
+                            <div className="flex items-center gap-2">
+                                <Activity className={`w-5 h-5 ${sensors.magnetometer.uT > 100 ? 'text-red-500' : sensors.magnetometer.uT > 40 ? 'text-yellow-500' : 'text-green-500'}`} />
+                                <span className={`text-sm font-bold ${textClass}`}>EMF STRENGTH</span>
+                            </div>
+                            <div className="text-right">
+                                <span className={`text-3xl font-black ${sensors.magnetometer.uT > 100 ? 'text-red-500' : sensors.magnetometer.uT > 40 ? 'text-yellow-500' : 'text-green-500'}`}>
+                                    {sensors.magnetometer.uT ? sensors.magnetometer.uT.toFixed(1) : '--'}
+                                </span>
+                                <span className="text-xs text-gray-400 ml-1">µT</span>
+                            </div>
                         </div>
-                        <div className="relative w-16 h-16 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
-                            <div className="absolute w-1 h-8 bg-purple-500 top-1/2 left-1/2 origin-bottom transform -translate-x-1/2 -translate-y-full rounded-full transition-transform duration-200" style={{ transform: `translateX(-50%) translateY(-100%) rotate(${sensors.magnetometer.heading}deg)` }}></div>
+
+                        {/* Visual Bar Gauge */}
+                        <div className="w-full h-3 bg-gray-300 dark:bg-gray-700 rounded-full overflow-hidden relative">
+                            <div
+                                className="h-full transition-all duration-300 ease-out"
+                                style={{
+                                    width: `${Math.min(100, (sensors.magnetometer.uT || 0))}%`,
+                                    background: `linear-gradient(90deg, #22c55e 0%, #eab308 40%, #ef4444 100%)`
+                                }}
+                            ></div>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-gray-400 mt-1">
+                            <span>0 µT</span>
+                            <span>NORMAL</span>
+                            <span>100+ µT</span>
                         </div>
                     </div>
 
-                    {/* EMF / uT Section */}
-                    <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
-                        <div className="flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                                <Activity className="w-4 h-4 text-yellow-500" />
-                                <span className={`text-xs ${textMutedClass}`}>MAGNETIC FIELD (EMF)</span>
-                            </div>
-                            <div className="text-right">
-                                <span className={`text-lg font-bold ${textClass}`}>{sensors.magnetometer.uT ? sensors.magnetometer.uT.toFixed(1) : '--'}</span>
-                                <span className="text-xs text-gray-400 ml-1">µT</span>
+                    {/* Compass Section (Secondary) */}
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
+                        <div>
+                            <p className={`text-xs ${textMutedClass}`}>COMPASS HEADING</p>
+                            <p className={`text-2xl font-black ${textClass}`}>{Math.round(sensors.magnetometer.heading)}°</p>
+                            <p className={`text-sm font-bold text-purple-500`}>{getCompassDirection(sensors.magnetometer.heading)}</p>
+                        </div>
+
+                        {/* 3D-ish Compass Arrow */}
+                        <div className="relative w-24 h-24 flex items-center justify-center">
+                            <div className={`absolute w-full h-full border-4 ${isDark ? 'border-gray-700' : 'border-gray-200'} rounded-full`}></div>
+
+                            <div
+                                className="w-4 h-16 relative transition-transform duration-300 ease-out"
+                                style={{
+                                    transform: `rotate(${sensors.magnetometer.heading}deg)`,
+                                    filter: 'drop-shadow(0px 2px 3px rgba(0,0,0,0.3))'
+                                }}
+                            >
+                                <div className="absolute top-0 w-0 h-0 border-l-[8px] border-r-[8px] border-b-[32px] border-l-transparent border-r-transparent border-b-red-500"></div>
+                                <div className="absolute bottom-0 w-0 h-0 border-l-[8px] border-r-[8px] border-t-[32px] border-l-transparent border-r-transparent border-t-gray-300"></div>
                             </div>
                         </div>
                     </div>
@@ -453,7 +492,8 @@ const SensorMonitor = () => {
 
                     {showInfo === 'env' && (
                         <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
-                            Pressure/Density calculated from Altitude. Noise from Mic. Light (Lux) from Ambient sensor (Android).
+                            <p className="mb-1"><strong>Air Density:</strong> Calculated from Pressure. Only shown if real pressure sensor is available.</p>
+                            <p className="mb-1"><strong>Pressure:</strong> Shows real sensor data only. No simulated data.</p>
                         </div>
                     )}
 
@@ -470,9 +510,9 @@ const SensorMonitor = () => {
                         </div>
                         {/* Air Density */}
                         <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
-                            <p className={`text-xs ${textMutedClass} mb-1`}>DENSITY</p>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>AIR DENSITY</p>
                             <p className={`text-lg font-bold ${textClass}`}>
-                                {getAirDensity()} <span className="text-xs font-normal">kg/m³</span>
+                                {sensors.environment.isBarometerReal ? getAirDensity() : '--'} <span className="text-xs font-normal">kg/m³</span>
                             </p>
                         </div>
                     </div>
@@ -485,7 +525,13 @@ const SensorMonitor = () => {
                         </div>
                         <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
                             <p className={`text-xs ${textMutedClass} mb-1`}>PRESSURE</p>
-                            <p className={`text-sm font-bold ${textClass}`}>{getPressurePSI()} PSI</p>
+                            <div className="flex items-baseline gap-1">
+                                <p className={`text-lg font-bold ${textClass}`}>
+                                    {sensors.environment.isBarometerReal ? getPressurePSI() : '--'}
+                                </p>
+                                <span className="text-xs text-gray-400">PSI</span>
+                            </div>
+                            {!sensors.environment.isBarometerReal && <span className="text-[9px] text-red-400">NO SENSOR</span>}
                         </div>
                     </div>
                 </div>
