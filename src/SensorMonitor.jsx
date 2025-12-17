@@ -118,6 +118,24 @@ const SensorMonitor = () => {
             }
         }
 
+        // Barometer (Real Pressure) (flag required usually)
+        // eslint-disable-next-line no-undef
+        if ('Barometer' in window || (typeof Barometer !== 'undefined')) {
+            try {
+                // eslint-disable-next-line no-undef
+                const BarometerClass = window['Barometer']; // defensive
+                const bar = new BarometerClass({ frequency: 1 });
+                bar.addEventListener('reading', () => {
+                    setSensors(prev => ({
+                        ...prev,
+                        environment: { ...prev.environment, pressureHPa: bar.pressure, isBarometerReal: true },
+                        available: { ...prev.available, barometer: true }
+                    }));
+                });
+                bar.start();
+            } catch (e) { console.log("Barometer error", e); }
+        }
+
         // Ambient Light
         if ('AmbientLightSensor' in window) {
             try {
