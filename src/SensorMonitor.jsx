@@ -409,6 +409,20 @@ const SensorMonitor = () => {
                             <div className="absolute w-1 h-8 bg-purple-500 top-1/2 left-1/2 origin-bottom transform -translate-x-1/2 -translate-y-full rounded-full transition-transform duration-200" style={{ transform: `translateX(-50%) translateY(-100%) rotate(${sensors.magnetometer.heading}deg)` }}></div>
                         </div>
                     </div>
+
+                    {/* EMF / uT Section */}
+                    <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                                <Activity className="w-4 h-4 text-yellow-500" />
+                                <span className={`text-xs ${textMutedClass}`}>MAGNETIC FIELD (EMF)</span>
+                            </div>
+                            <div className="text-right">
+                                <span className={`text-lg font-bold ${textClass}`}>{sensors.magnetometer.uT ? sensors.magnetometer.uT.toFixed(1) : '--'}</span>
+                                <span className="text-xs text-gray-400 ml-1">µT</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 {/* 4. ENVIRONMENT */}
