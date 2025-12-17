@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, Navigation, Gauge, Ruler, Volume2, Sun, Thermometer, Info, Moon } from 'lucide-react';
+import { Activity, Navigation, Gauge, Ruler, Volume2, Sun, Thermometer, Info, Moon, RotateCcw } from 'lucide-react';
 
 const SensorMonitor = () => {
     const [time, setTime] = useState(new Date());
@@ -100,24 +100,172 @@ const SensorMonitor = () => {
         return dirs[Math.round(azimuth / 45) % 8];
     };
 
+    const [permissionGranted, setPermissionGranted] = useState(false);
+
+    const resetSensors = () => {
+        setSensors({
+            gps: {
+                altitude: 0,
+                altError: 0,
+                speed: 0,
+                groundSpeed: 0
+            },
+            accelerometer: {
+                totalG: 1.000,
+                peakG: 0,
+                vibrationLevel: 0,
+                peakVibration: 0
+            },
+            magnetometer: {
+                microTesla: 0,
+                azimuthMagnetic: 0,
+                declination: -3.2 // Approx default
+            },
+            barometer: {
+                pressureHPa: 1013.25, // Standard ATM
+                calcAltitude: 0,
+                mslPressure: 1013.25,
+                verticalSpeed: 0.00
+            },
+            sound: { decibels: 0 },
+            light: { lux: 0 },
+            device: {
+                batteryTemp: 30 + Math.random() * 5, // Simulation fallback
+                cpuTemp: 40 + Math.random() * 10     // Simulation fallback
+            },
+            lidar: {
+                distance: 0,
+                approachRate: 0,
+                surfaceTemp: 0,
+                objectVolume: 0
+            }
+        });
+    };
+
+    const requestPermissions = async () => {
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+            try {
+                const permission = await DeviceOrientationEvent.requestPermission();
+                if (permission === 'granted') {
+                    setPermissionGranted(true);
+                }
+            } catch (e) {
+                console.error(e);
+            }
+        } else {
+            setPermissionGranted(true);
+        }
+    };
+
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
-        const sensorUpdate = setInterval(() => {
+
+        // Simulation Loop for unavailable sensors
+        const simInterval = setInterval(() => {
+            setSensors(prev => {
+                // Determine simulated "noise" or valid reading
+                const rand = Math.random();
+
+                // Simulate fluctuation only if we don't have real data (simple heuristic)
+                // In a real app we'd flag which sensors are "live" vs "simulated"
+
+                // Always simulate Lidar/Temp/Light/Sound as they aren't standard accessible web APIs without flags or user media
+                const newTotalG = prev.accelerometer.totalG; // Kept from real sensor if available
+
+                return {
+                    ...prev,
+                    accelerometer: {
+                        ...prev.accelerometer,
+                        peakG: Math.max(prev.accelerometer.peakG, newTotalG),
+                        // Simulate tiny vibration if no real sensor update happens, else calculate from real
+                    },
+                    sound: { decibels: Math.floor(35 + Math.random() * 20) }, // Simulating ambient noise
+                    light: { lux: Math.floor(200 + Math.random() * 300) }, // Simulating daylight
+                    device: {
+                        batteryTemp: parseFloat((30 + Math.sin(Date.now() / 10000) * 2).toFixed(1)),
+                        cpuTemp: parseFloat((45 + Math.cos(Date.now() / 5000) * 5).toFixed(1))
+                    },
+                    lidar: {
+                        distance: parseFloat((2 + Math.random()).toFixed(2)),
+                        approachRate: parseFloat((Math.random() * 0.5).toFixed(2)),
+                        surfaceTemp: parseFloat((20 + Math.random() * 5).toFixed(1)),
+                        objectVolume: parseFloat((0.1 + Math.random() * 0.05).toFixed(3))
+                    }
+                };
+            });
+        }, 800);
+
+        // REAL SENSORS
+        const handleOrientation = (e) => {
+            if (!e.alpha) return;
+            const heading = 360 - e.alpha; // WebKit compass heading
+            setSensors(prev => ({
+                ...prev,
+                magnetometer: {
+                    ...prev.magnetometer,
+                    azimuthMagnetic: heading,
+                    microTesla: 40 + (Math.random() * 5) // Simulating field intensity as it's not directly in orientation
+                }
+            }));
+        };
+
+        const handleMotion = (e) => {
+            if (!e.accelerationIncludingGravity) return;
+            const { x, y, z } = e.accelerationIncludingGravity;
+            const total = Math.sqrt(x * x + y * y + z * z) / 9.81; // Convert to G's
+
+            // Calc vibration (simplified as variance from 1G)
+            const vib = Math.abs(total - 1.0);
+
             setSensors(prev => ({
                 ...prev,
                 accelerometer: {
                     ...prev.accelerometer,
-                    totalG: parseFloat((0.98 + Math.random() * 0.08).toFixed(3))
-                },
-                sound: { decibels: Math.floor(38 + Math.random() * 15) },
-                light: { lux: Math.floor(300 + Math.random() * 100) }
+                    totalG: parseFloat(total.toFixed(3)),
+                    peakG: Math.max(prev.accelerometer.peakG, total),
+                    vibrationLevel: parseFloat(vib.toFixed(3)),
+                    peakVibration: Math.max(prev.accelerometer.peakVibration, vib)
+                }
             }));
-        }, 1000);
+        };
+
+        const handleGPS = (pos) => {
+            const { latitude, longitude, altitude, speed, accuracy, altitudeAccuracy } = pos.coords;
+            setSensors(prev => ({
+                ...prev,
+                gps: {
+                    altitude: altitude || prev.gps.altitude,
+                    altError: altitudeAccuracy || prev.gps.altError,
+                    speed: speed ? (speed * 3.6) : 0, // m/s to km/h
+                    groundSpeed: speed || 0
+                }
+            }));
+        };
+
+        const handleGPSError = (err) => {
+            console.warn("GPS Error", err);
+        };
+
+        if (permissionGranted || typeof DeviceOrientationEvent === 'undefined') {
+            window.addEventListener('deviceorientation', handleOrientation);
+            window.addEventListener('devicemotion', handleMotion);
+
+            if ('geolocation' in navigator) {
+                navigator.geolocation.watchPosition(handleGPS, handleGPSError, {
+                    enableHighAccuracy: true,
+                    maximumAge: 1000,
+                    timeout: 20000
+                });
+            }
+        }
+
         return () => {
             clearInterval(timer);
-            clearInterval(sensorUpdate);
+            clearInterval(simInterval);
+            window.removeEventListener('deviceorientation', handleOrientation);
+            window.removeEventListener('devicemotion', handleMotion);
         };
-    }, []);
+    }, [permissionGranted]);
 
     const bgClass = isDark ? 'bg-gray-900' : 'bg-gray-100';
     const cardClass = isDark ? 'bg-gray-800' : 'bg-white';
@@ -137,6 +285,18 @@ const SensorMonitor = () => {
                         </p>
                     </div>
                     <div className="flex gap-2">
+                        <button
+                            onClick={requestPermissions}
+                            className={`px-3 py-2 bg-green-600 text-white text-xs font-bold rounded-full hover:bg-green-700 transition-colors ${permissionGranted ? 'hidden' : ''}`}
+                        >
+                            START
+                        </button>
+                        <button
+                            onClick={resetSensors}
+                            className={`p-2 rounded-full ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-200 hover:bg-gray-300'} transition-colors`}
+                        >
+                            <RotateCcw className={`w-4 h-4 ${isDark ? 'text-gray-300' : 'text-gray-600'}`} />
+                        </button>
                         <button
                             onClick={() => setIsDark(!isDark)}
                             className={`p-2 rounded-full ${isDark ? 'bg-gray-700' : 'bg-gray-200'} transition-colors`}
