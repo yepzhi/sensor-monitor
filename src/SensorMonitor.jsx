@@ -192,6 +192,14 @@ const SensorMonitor = () => {
         updateAudio();
     };
 
+    // Throttling Refs
+    const lastUpdate = useRef({
+        motion: 0,
+        vibration: 0,
+        gps: 0,
+        climb: 0
+    });
+
     useEffect(() => {
         const timer = setInterval(() => setTime(new Date()), 1000);
 
@@ -206,53 +214,90 @@ const SensorMonitor = () => {
         };
 
         const handleMotion = (e) => {
+            const now = Date.now();
             const acc = e.accelerationIncludingGravity;
             const lin = e.acceleration;
             if (!acc) return;
+
             const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
             const total = Math.sqrt(x * x + y * y + z * z) / 9.81;
 
-            let vibration = 0;
-            if (lin && lin.x !== null) {
-                vibration = Math.sqrt(lin.x * lin.x + lin.y * lin.y + lin.z * lin.z);
+            // Updates to apply this frame
+            let updates = {};
+            let shouldUpdate = false;
+
+            // 1. G-Force & Peak: Update every 300ms (.3s)
+            if (now - lastUpdate.current.motion > 300) {
+                updates.totalG = total;
+                updates.x = x;
+                updates.y = y;
+                updates.z = z;
+                lastUpdate.current.motion = now;
+                shouldUpdate = true;
             }
 
-            setSensors(prev => ({
-                ...prev,
-                accelerometer: {
-                    x, y, z, totalG: total,
-                    peakG: Math.max(prev.accelerometer.peakG, total),
-                    vibration: vibration
-                },
-                available: { ...prev.available, motion: true }
-            }));
+            // 2. Vibration: Update every 1000ms (1s)
+            if (lin && lin.x !== null && (now - lastUpdate.current.vibration > 1000)) {
+                updates.vibration = Math.sqrt(lin.x * lin.x + lin.y * lin.y + lin.z * lin.z);
+                lastUpdate.current.vibration = now;
+                shouldUpdate = true;
+            }
+
+            if (shouldUpdate) {
+                setSensors(prev => ({
+                    ...prev,
+                    accelerometer: {
+                        ...prev.accelerometer,
+                        ...updates,
+                        // Always check peak against live value, but only set state if throttled
+                        peakG: Math.max(prev.accelerometer.peakG, total)
+                    },
+                    available: { ...prev.available, motion: true }
+                }));
+            }
         };
 
         const handleGPS = (pos) => {
-            const { latitude, longitude, altitude, accuracy, speed, heading } = pos.coords;
             const now = Date.now();
+            const { latitude, longitude, altitude, accuracy, speed, heading } = pos.coords;
             const alt = altitude || 0;
 
-            let vSpeed = 0;
-            if (lastGpsRef.current.alt !== null && lastGpsRef.current.time) {
-                const dt = (now - lastGpsRef.current.time) / 1000;
-                const dh = alt - lastGpsRef.current.alt;
-                if (dt > 0) vSpeed = dh / dt;
+            let updates = {};
+            let shouldUpdate = false;
+
+            // 1. Speed & Altitude: Update every 300ms (.3s)
+            // Note: GPS hardware usually provides 1Hz updates, but we allow faster if available
+            if (now - lastUpdate.current.gps > 300) {
+                updates.gps = { latitude, longitude, altitude: alt, accuracy, speed: speed || 0, heading };
+                lastUpdate.current.gps = now;
+                shouldUpdate = true;
             }
-            lastGpsRef.current = { alt: alt, time: now };
 
-            const press = calculatePressureFromAlt(alt);
+            // 2. Climb Rate: Update every 1000ms (1s) for stability
+            let vSpeedUpdate = {};
+            if (now - lastUpdate.current.climb > 1000) {
+                let vSpeed = 0;
+                if (lastGpsRef.current.alt !== null && lastGpsRef.current.time) {
+                    const dt = (now - lastGpsRef.current.time) / 1000;
+                    const dh = alt - lastGpsRef.current.alt;
+                    if (dt > 0) vSpeed = dh / dt;
+                }
+                // Save snaphost for next climb calc
+                lastGpsRef.current = { alt: alt, time: now };
 
-            setSensors(prev => ({
-                ...prev,
-                gps: { latitude, longitude, altitude: alt, accuracy, speed: speed || 0, heading },
-                environment: {
-                    ...prev.environment,
-                    pressureHPa: press,
-                    verticalSpeed: vSpeed
-                },
-                available: { ...prev.available, gps: true }
-            }));
+                vSpeedUpdate = { verticalSpeed: vSpeed };
+                lastUpdate.current.climb = now;
+                shouldUpdate = true;
+            }
+
+            if (shouldUpdate) {
+                setSensors(prev => ({
+                    ...prev,
+                    gps: { ...prev.gps, ...(updates.gps || {}) },
+                    environment: { ...prev.environment, ...vSpeedUpdate },
+                    available: { ...prev.available, gps: true }
+                }));
+            }
         };
 
         if (permissionGranted || typeof DeviceOrientationEvent === 'undefined') {
