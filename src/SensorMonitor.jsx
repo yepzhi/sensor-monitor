@@ -402,7 +402,7 @@ const SensorMonitor = () => {
                     </div>
                 </div>
 
-                {/* 3. COMPASS + EMF (Redesigned) */}
+                {/* 3. COMPASS + EMF */}
                 <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
@@ -414,17 +414,13 @@ const SensorMonitor = () => {
 
                     {showInfo === 'mag' && (
                         <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
-                            <p className="mb-2"><strong>Magnetic Field (EMF):</strong> Measures ambient magnetic flux in microteslas (µT).</p>
-                            <ul className="list-disc pl-4 mb-2">
-                                <li><strong>Green (&lt;40µT):</strong> Normal background.</li>
-                                <li><strong>Yellow (40-100µT):</strong> Elevated.</li>
-                                <li><strong>Red (&gt;100µT):</strong> High interference.</li>
-                            </ul>
-                            <p><strong>Compass:</strong> Points to magnetic North.</p>
+                            <p className="mb-2"><strong>Magnetic Field (EMF):</strong> Raw µT reading. Requires 'Magnetometer' sensor (often blocked on iOS/Web).</p>
+                            <p className="mb-2"><strong>True North (GPS):</strong> Uses GPS bearing when moving.</p>
+                            <p><strong>Magnetic North:</strong> Uses device compass when stationary.</p>
                         </div>
                     )}
 
-                    {/* EMF / uT Section (Top Priority) */}
+                    {/* EMF / uT Section */}
                     <div className={`mb-6 p-3 rounded-lg ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
                         <div className="flex justify-between items-end mb-2">
                             <div className="flex items-center gap-2">
@@ -439,7 +435,6 @@ const SensorMonitor = () => {
                             </div>
                         </div>
 
-                        {/* Visual Bar Gauge */}
                         <div className="w-full h-3 bg-gray-300 dark:bg-gray-700 rounded-full overflow-hidden relative">
                             <div
                                 className="h-full transition-all duration-300 ease-out"
@@ -451,35 +446,46 @@ const SensorMonitor = () => {
                         </div>
                         <div className="flex justify-between text-[10px] text-gray-400 mt-1">
                             <span>0 µT</span>
-                            <span>NORMAL</span>
+                            <span>{!sensors.magnetometer.uT && "SENSOR NOT AVAILABLE"}</span>
                             <span>100+ µT</span>
                         </div>
                     </div>
 
-                    {/* Compass Section (Secondary) */}
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
-                        <div>
-                            <p className={`text-xs ${textMutedClass}`}>COMPASS HEADING</p>
-                            <p className={`text-2xl font-black ${textClass}`}>{Math.round(sensors.magnetometer.heading)}°</p>
-                            <p className={`text-sm font-bold text-purple-500`}>{getCompassDirection(sensors.magnetometer.heading)}</p>
-                        </div>
+                    {/* Compass Section (True North Logic) */}
+                    {(() => {
+                        // Priority: GPS Heading (True North) IF moving > 2km/h, else Magnetic North
+                        // Note: GPS heading is only valid when moving.
+                        const speedKmh = sensors.gps.speed * 3.6;
+                        const useGpsHeading = speedKmh > 3 && sensors.gps.heading !== null;
+                        const displayHeading = useGpsHeading ? sensors.gps.heading : sensors.magnetometer.heading;
+                        const headingType = useGpsHeading ? "GPS TRUE NORTH" : "MAGNETIC NORTH";
 
-                        {/* 3D-ish Compass Arrow */}
-                        <div className="relative w-24 h-24 flex items-center justify-center">
-                            <div className={`absolute w-full h-full border-4 ${isDark ? 'border-gray-700' : 'border-gray-200'} rounded-full`}></div>
+                        return (
+                            <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700">
+                                <div>
+                                    <p className={`text-xs ${textMutedClass}`}>{headingType}</p>
+                                    <p className={`text-2xl font-black ${textClass}`}>{Math.round(displayHeading)}°</p>
+                                    <p className={`text-sm font-bold text-purple-500`}>{getCompassDirection(displayHeading)}</p>
+                                </div>
 
-                            <div
-                                className="w-4 h-16 relative transition-transform duration-300 ease-out"
-                                style={{
-                                    transform: `rotate(${sensors.magnetometer.heading}deg)`,
-                                    filter: 'drop-shadow(0px 2px 3px rgba(0,0,0,0.3))'
-                                }}
-                            >
-                                <div className="absolute top-0 w-0 h-0 border-l-[8px] border-r-[8px] border-b-[32px] border-l-transparent border-r-transparent border-b-red-500"></div>
-                                <div className="absolute bottom-0 w-0 h-0 border-l-[8px] border-r-[8px] border-t-[32px] border-l-transparent border-r-transparent border-t-gray-300"></div>
+                                <div className="relative w-24 h-24 flex items-center justify-center">
+                                    <div className={`absolute w-full h-full border-4 ${isDark ? 'border-gray-700' : 'border-gray-200'} rounded-full`}></div>
+
+                                    <div
+                                        className="w-4 h-16 relative transition-transform duration-300 ease-out"
+                                        style={{
+                                            transform: `rotate(${displayHeading}deg)`,
+                                            filter: 'drop-shadow(0px 2px 3px rgba(0,0,0,0.3))'
+                                        }}
+                                    >
+                                        {/* Arrow: North Red, South White */}
+                                        <div className="absolute top-0 w-0 h-0 border-l-[8px] border-r-[8px] border-b-[32px] border-l-transparent border-r-transparent border-b-red-500"></div>
+                                        <div className="absolute bottom-0 w-0 h-0 border-l-[8px] border-r-[8px] border-t-[32px] border-l-transparent border-r-transparent border-t-gray-300"></div>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                    </div>
+                        );
+                    })()}
                 </div>
 
                 {/* 4. ENVIRONMENT */}
@@ -492,8 +498,8 @@ const SensorMonitor = () => {
 
                     {showInfo === 'env' && (
                         <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
-                            <p className="mb-1"><strong>Air Density:</strong> Calculated from Pressure. Only shown if real pressure sensor is available.</p>
-                            <p className="mb-1"><strong>Pressure:</strong> Shows real sensor data only. No simulated data.</p>
+                            <p className="mb-1"><strong>Air Density:</strong> Calculated from Pressure. Only shown if real sensor available.</p>
+                            <p className="mb-1"><strong>Pressure:</strong> Real sensor data only.</p>
                         </div>
                     )}
 
