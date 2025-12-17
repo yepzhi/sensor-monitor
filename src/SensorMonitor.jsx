@@ -110,10 +110,9 @@ const SensorMonitor = () => {
         // Magnetometer (Real EMF)
         if ('Magnetometer' in window) {
             try {
-                // eslint-disable-next-line no-undef
-                const mag = new Magnetometer({ frequency: 10 });
+                const MagnetometerClass = window['Magnetometer'];
+                const mag = new MagnetometerClass({ frequency: 10 });
                 mag.addEventListener('reading', () => {
-                    // Calculate total field strength in uT
                     const x = mag.x, y = mag.y, z = mag.z;
                     const totaluT = Math.sqrt(x * x + y * y + z * z);
                     setSensors(prev => ({
@@ -132,8 +131,8 @@ const SensorMonitor = () => {
         // Ambient Light
         if ('AmbientLightSensor' in window) {
             try {
-                // eslint-disable-next-line no-undef
-                const light = new AmbientLightSensor();
+                const AmbientLightSensorClass = window['AmbientLightSensor'];
+                const light = new AmbientLightSensorClass();
                 light.addEventListener('reading', () => {
                     setSensors(prev => ({
                         ...prev,
@@ -148,8 +147,12 @@ const SensorMonitor = () => {
     };
 
     const initAudio = (stream) => {
+        // AudioContext strictness
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+
         if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            audioContextRef.current = new AudioContextClass();
         }
         const audioCtx = audioContextRef.current;
         const source = audioCtx.createMediaStreamSource(stream);
@@ -160,7 +163,11 @@ const SensorMonitor = () => {
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
 
         const updateAudio = () => {
-            if (audioCtx.state === 'suspended') audioCtx.resume();
+            // Handle suspended state (autoplay policy)
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(e => console.warn("Audio resume failed", e));
+            }
+
             analyser.getByteFrequencyData(dataArray);
 
             let sum = 0;
@@ -182,7 +189,8 @@ const SensorMonitor = () => {
         const timer = setInterval(() => setTime(new Date()), 1000);
 
         const handleOrientation = (e) => {
-            let heading = e.webkitCompassHeading || (e.alpha ? 360 - e.alpha : 0);
+            // Null check for heading
+            let heading = e.webkitCompassHeading || (e.alpha ? 360 - e.alpha : 0) || 0;
             setSensors(prev => ({
                 ...prev,
                 magnetometer: { ...prev.magnetometer, heading, accuracy: e.webkitCompassAccuracy || 0 },
@@ -192,14 +200,13 @@ const SensorMonitor = () => {
 
         const handleMotion = (e) => {
             const acc = e.accelerationIncludingGravity;
-            const lin = e.acceleration; // Linear acceleration (no gravity) often better for vibration
+            const lin = e.acceleration;
             if (!acc) return;
             const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
             const total = Math.sqrt(x * x + y * y + z * z) / 9.81;
 
-            // Vibration calc (using linear acceleration if available, else raw changes)
             let vibration = 0;
-            if (lin) {
+            if (lin && lin.x !== null) {
                 vibration = Math.sqrt(lin.x * lin.x + lin.y * lin.y + lin.z * lin.z);
             }
 
