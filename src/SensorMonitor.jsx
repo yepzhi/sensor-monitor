@@ -423,7 +423,7 @@ const SensorMonitor = () => {
             <div className="mt-8 mb-4 text-center border-t border-gray-200 dark:border-gray-800 pt-4">
                 <p className={`text-[10px] ${textMutedClass} mb-2`}>
                     Data accuracy depends on device hardware.<br />
-                    EMF/Light sensors require Android/Chrome support.
+                    EMF/Light sensors require Android/Chrome support. v2.0
                 </p>
                 <a
                     href="http://yepzhi.com"
