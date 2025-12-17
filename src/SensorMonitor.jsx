@@ -1,6 +1,5 @@
-```javascript
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Navigation, RotateCcw, Info, Moon, MapPin, Gauge, Mic, ArrowUp, ArrowDown } from 'lucide-react';
+import { Activity, Navigation, RotateCcw, Info, Moon, MapPin, Gauge, Mic, ArrowUp, ArrowDown, Zap, Waves } from 'lucide-react';
 
 const SensorMonitor = () => {
     const [time, setTime] = useState(new Date());
@@ -21,38 +20,48 @@ const SensorMonitor = () => {
         accelerometer: {
             x: 0, y: 0, z: 0,
             totalG: 0,
-            peakG: 0
+            peakG: 0,
+            vibration: 0 // New vibration index
         },
-        magnetometer: { heading: 0, accuracy: 0 },
+        magnetometer: {
+            heading: 0,
+            accuracy: 0,
+            uT: null // Microteslas (EMF)
+        },
         environment: {
-            verticalSpeed: 0, // Calculated from GPS delta
-            pressureHPa: 1013.25, // Derived
-            soundDb: 0 // Real mic input
+            verticalSpeed: 0,
+            pressureHPa: 1013.25,
+            isBarometerReal: false, // Track if using real or derived
+            soundDb: 0,
+            lux: null // Ambient Light
         },
         available: {
             gps: false,
             motion: false,
             orientation: false,
-            mic: false
+            mic: false,
+            magnetometer: false, // For direct uT reading
+            barometer: false,
+            light: false
         }
     });
 
-    // Refs for calculations across renders
     const lastGpsRef = useRef({ alt: null, time: null });
     const audioContextRef = useRef(null);
+    const magSensorRef = useRef(null); // Reference for Generic Sensor API Magnetometer
+    const lightSensorRef = useRef(null); // Ref for Light Sensor
 
     // --- Helpers ---
     const calculatePressureFromAlt = (altMeters) => {
-        if (!altMeters) return 1013.25;
         const p0 = 1013.25;
         return p0 * Math.pow((1 - 2.25577e-5 * altMeters), 5.25588);
     };
 
     const getPressurePSI = () => (sensors.environment.pressureHPa * 0.0145038).toFixed(2);
-    
+
     const getAirDensity = () => {
-        const P = sensors.environment.pressureHPa * 100; 
-        const T = 293.15; // Assume 20C/68F standard if we can't measure
+        const P = sensors.environment.pressureHPa * 100;
+        const T = 293.15;
         const R = 287.05;
         return (P / (R * T)).toFixed(3);
     };
@@ -73,7 +82,7 @@ const SensorMonitor = () => {
 
     // --- Permission & Start Logic ---
     const requestPermissions = async () => {
-        // 1. Motion/Orientation (iOS specifically)
+        // 1. Motion/Orientation (iOS)
         if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
             try {
                 const permission = await DeviceOrientationEvent.requestPermission();
@@ -90,7 +99,51 @@ const SensorMonitor = () => {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             initAudio(stream);
         } catch (e) {
-            console.warn("Mic access denied or not available", e);
+            console.warn("Mic access denied", e);
+        }
+
+        // 3. Generic Sensors (Android Chrome usually)
+        initGenericSensors();
+    };
+
+    const initGenericSensors = () => {
+        // Magnetometer (Real EMF)
+        if ('Magnetometer' in window) {
+            try {
+                // eslint-disable-next-line no-undef
+                const mag = new Magnetometer({ frequency: 10 });
+                mag.addEventListener('reading', () => {
+                    // Calculate total field strength in uT
+                    const x = mag.x, y = mag.y, z = mag.z;
+                    const totaluT = Math.sqrt(x * x + y * y + z * z);
+                    setSensors(prev => ({
+                        ...prev,
+                        magnetometer: { ...prev.magnetometer, uT: totaluT },
+                        available: { ...prev.available, magnetometer: true }
+                    }));
+                });
+                mag.start();
+                magSensorRef.current = mag;
+            } catch (error) {
+                console.log("Magnetometer not supported/allowed", error);
+            }
+        }
+
+        // Ambient Light
+        if ('AmbientLightSensor' in window) {
+            try {
+                // eslint-disable-next-line no-undef
+                const light = new AmbientLightSensor();
+                light.addEventListener('reading', () => {
+                    setSensors(prev => ({
+                        ...prev,
+                        environment: { ...prev.environment, lux: light.illuminance },
+                        available: { ...prev.available, light: true }
+                    }));
+                });
+                light.start();
+                lightSensorRef.current = light;
+            } catch (err) { console.log("Light sensor error", err); }
         }
     };
 
@@ -105,24 +158,19 @@ const SensorMonitor = () => {
         source.connect(analyser);
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        
+
         const updateAudio = () => {
             if (audioCtx.state === 'suspended') audioCtx.resume();
             analyser.getByteFrequencyData(dataArray);
-            
-            // Calc RMS (Root Mean Square) for volume
+
             let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i] * dataArray[i];
-            }
+            for (let i = 0; i < dataArray.length; i++) { sum += dataArray[i] * dataArray[i]; }
             const rms = Math.sqrt(sum / dataArray.length);
-            // Approx dB mapping (0-255 scale -> ~30-100dB range approx)
-            // This is uncalibrated but responsive
-            const db = rms > 0 ? Math.round(20 * Math.log10(rms)) + 10 : 0; 
-            
+            const db = rms > 0 ? Math.round(20 * Math.log10(rms)) + 10 : 0;
+
             setSensors(prev => ({
                 ...prev,
-                environment: { ...prev.environment, soundDb: Math.max(30, db) }, // Floor at 30dB ambient
+                environment: { ...prev.environment, soundDb: Math.max(30, db) },
                 available: { ...prev.available, mic: true }
             }));
             requestAnimationFrame(updateAudio);
@@ -137,21 +185,30 @@ const SensorMonitor = () => {
             let heading = e.webkitCompassHeading || (e.alpha ? 360 - e.alpha : 0);
             setSensors(prev => ({
                 ...prev,
-                magnetometer: { heading, accuracy: e.webkitCompassAccuracy || 0 },
+                magnetometer: { ...prev.magnetometer, heading, accuracy: e.webkitCompassAccuracy || 0 },
                 available: { ...prev.available, orientation: true }
             }));
         };
 
         const handleMotion = (e) => {
             const acc = e.accelerationIncludingGravity;
+            const lin = e.acceleration; // Linear acceleration (no gravity) often better for vibration
             if (!acc) return;
             const x = acc.x || 0, y = acc.y || 0, z = acc.z || 0;
-            const total = Math.sqrt(x*x + y*y + z*z) / 9.81;
+            const total = Math.sqrt(x * x + y * y + z * z) / 9.81;
+
+            // Vibration calc (using linear acceleration if available, else raw changes)
+            let vibration = 0;
+            if (lin) {
+                vibration = Math.sqrt(lin.x * lin.x + lin.y * lin.y + lin.z * lin.z);
+            }
+
             setSensors(prev => ({
                 ...prev,
                 accelerometer: {
                     x, y, z, totalG: total,
-                    peakG: Math.max(prev.accelerometer.peakG, total)
+                    peakG: Math.max(prev.accelerometer.peakG, total),
+                    vibration: vibration
                 },
                 available: { ...prev.available, motion: true }
             }));
@@ -161,26 +218,26 @@ const SensorMonitor = () => {
             const { latitude, longitude, altitude, accuracy, speed, heading } = pos.coords;
             const now = Date.now();
             const alt = altitude || 0;
-            
-            // Calculate Vertical Speed
+
             let vSpeed = 0;
             if (lastGpsRef.current.alt !== null && lastGpsRef.current.time) {
-                const dt = (now - lastGpsRef.current.time) / 1000; // seconds
-                const dh = alt - lastGpsRef.current.alt; // meters
+                const dt = (now - lastGpsRef.current.time) / 1000;
+                const dh = alt - lastGpsRef.current.alt;
                 if (dt > 0) vSpeed = dh / dt;
             }
-            // Update ref
             lastGpsRef.current = { alt: alt, time: now };
 
+            // Only use calculated if we don't have a real barometer (Generic Sensor API Barometer is very rare, so assuming calculated for now unless I add PressureObserver logic which is extremely experimental)
+            // For now, on Android, standard is usually simulated pressure from GPS too unless using native app.
             const press = calculatePressureFromAlt(alt);
-            
+
             setSensors(prev => ({
                 ...prev,
                 gps: { latitude, longitude, altitude: alt, accuracy, speed: speed || 0, heading },
-                environment: { 
-                    ...prev.environment, 
-                    pressureHPa: press,
-                    verticalSpeed: vSpeed // smoothed would be better, but this works for raw
+                environment: {
+                    ...prev.environment,
+                    pressureHPa: press, // Use calculated for consistency across web
+                    verticalSpeed: vSpeed
                 },
                 available: { ...prev.available, gps: true }
             }));
@@ -214,78 +271,103 @@ const SensorMonitor = () => {
     const borderClass = isDark ? 'border-gray-700' : 'border-gray-200';
 
     return (
-        <div className={`min - h - screen ${ bgClass } p - 3 font - mono text - xs transition - colors duration - 300`}>
+        <div className={`min-h-screen ${bgClass} p-3 font-mono text-xs transition-colors duration-300`}>
             {/* Header */}
-            <div className={`${ cardClass } rounded - xl shadow - sm p - 3 mb - 3 border ${ borderClass } `}>
+            <div className={`${cardClass} rounded-xl shadow-sm p-3 mb-3 border ${borderClass}`}>
                 <div className="flex justify-between items-center">
                     <div>
-                        <h1 className={`text - lg font - bold ${ textClass } tracking - tight`}>SENSOR MONITOR</h1>
-                        <p className={`text - xs ${ textMutedClass } `}>REAL-TIME + DERIVED DATA</p>
+                        <h1 className={`text-lg font-bold ${textClass} tracking-tight`}>SENSOR MONITOR</h1>
+                        <p className={`text-xs ${textMutedClass}`}>MULTI-SENSOR SYSTEM</p>
                     </div>
                     <div className="flex gap-2">
-                         <button onClick={requestPermissions} className={`px - 3 py - 2 bg - green - 600 text - white font - bold rounded - full hover: bg - green - 700 ${ permissionGranted ? 'hidden' : '' } `}>START</button>
-                        <button onClick={resetSensors} className={`p - 2 rounded - full ${ isDark ? 'bg-gray-700' : 'bg-gray-200' } `}><RotateCcw className="w-4 h-4" /></button>
-                        <button onClick={() => setIsDark(!isDark)} className={`p - 2 rounded - full ${ isDark ? 'bg-gray-700' : 'bg-gray-200' } `}><Moon className={`w - 4 h - 4 ${ isDark ? 'text-yellow-400' : 'text-gray-600' } `} /></button>
+                        <button onClick={requestPermissions} className={`px-3 py-2 bg-green-600 text-white font-bold rounded-full hover:bg-green-700 ${permissionGranted ? 'hidden' : ''}`}>START</button>
+                        <button onClick={resetSensors} className={`p-2 rounded-full ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`}><RotateCcw className="w-4 h-4" /></button>
+                        <button onClick={() => setIsDark(!isDark)} className={`p-2 rounded-full ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`}><Moon className={`w-4 h-4 ${isDark ? 'text-yellow-400' : 'text-gray-600'}`} /></button>
                         <button onClick={() => setIsMetric(!isMetric)} className="px-3 py-2 bg-blue-600 text-white font-bold rounded-full hover:bg-blue-700">{isMetric ? 'METRIC' : 'IMPERIAL'}</button>
                     </div>
                 </div>
             </div>
 
             <div className="space-y-3">
-                
-                {/* 1. ACCELEROMETER */}
-                <div className={`${ cardClass } rounded - lg shadow - sm p - 4 border ${ borderClass } `}>
+
+                {/* 1. ACCELEROMETER + VIBRATION */}
+                <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
                             <Activity className="w-5 h-5 text-red-500" />
-                            <h2 className={`font - bold ${ textClass } `}>ACCELEROMETER</h2>
+                            <h2 className={`font-bold ${textClass}`}>MOTION</h2>
                         </div>
-                        {!sensors.available.motion && <span className="text-xs text-red-500 font-bold animate-pulse">WAITING...</span>}
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className={`text - center p - 2 rounded ${ isDark ? 'bg-gray-700' : 'bg-gray-50' } `}>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>CURRENT</p>
-                            <p className={`text - 3xl font - black ${ textClass } `}>{sensors.accelerometer.totalG.toFixed(2)}<span className="text-sm ml-1 font-normal text-gray-500">G</span></p>
-                        </div>
-                        <div className={`text - center p - 2 rounded ${ isDark ? 'bg-gray-700' : 'bg-gray-50' } `}>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>PEAK</p>
-                            <p className="text-3xl font-black text-red-500">{sensors.accelerometer.peakG.toFixed(2)}<span className="text-sm ml-1 font-normal text-gray-500">G</span></p>
+                        <div className="flex items-center gap-2">
+                            {!sensors.available.motion && <span className="text-xs text-red-500 font-bold animate-pulse">WAITING...</span>}
+                            <button onClick={() => toggleInfo('accel')}><Info className={`w-4 h-4 ${textMutedClass}`} /></button>
                         </div>
                     </div>
-                    <div className="mt-2 text-center text-[10px] text-gray-400">
-                        X: {sensors.accelerometer.x.toFixed(2)} Y: {sensors.accelerometer.y.toFixed(2)} Z: {sensors.accelerometer.z.toFixed(2)}
+
+                    {showInfo === 'accel' && (
+                        <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
+                            Measures G-force (Total) and Vibration intensity (Linear acceleration).
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-3 gap-2">
+                        <div className={`text-center p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>G-FORCE</p>
+                            <p className={`text-xl font-black ${textClass}`}>{sensors.accelerometer.totalG.toFixed(2)}</p>
+                            <span className="text-[10px] text-gray-400">G</span>
+                        </div>
+                        <div className={`text-center p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>PEAK</p>
+                            <p className="text-xl font-black text-red-500">{sensors.accelerometer.peakG.toFixed(2)}</p>
+                            <span className="text-[10px] text-gray-400">G</span>
+                        </div>
+                        <div className={`text-center p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>VIBRATION</p>
+                            <div className="flex justify-center items-center gap-1">
+                                <Waves className={`w-4 h-4 ${sensors.accelerometer.vibration > 0.5 ? 'text-orange-500 animate-pulse' : 'text-gray-400'}`} />
+                                <p className={`text-xl font-black ${textClass}`}>{sensors.accelerometer.vibration.toFixed(1)}</p>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                {/* 2. GPS (Enhanced with Vert Spd) */}
-                <div className={`${ cardClass } rounded - lg shadow - sm p - 4 border ${ borderClass } `}>
+                {/* 2. GPS */}
+                <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
                             <MapPin className="w-5 h-5 text-blue-500" />
-                            <h2 className={`font - bold ${ textClass } `}>GPS</h2>
+                            <h2 className={`font-bold ${textClass}`}>GPS</h2>
                         </div>
-                        {!sensors.available.gps && <span className="text-xs text-orange-500 font-bold animate-pulse">LOCATING...</span>}
+                        <div className="flex items-center gap-2">
+                            {!sensors.available.gps && <span className="text-xs text-orange-500 font-bold animate-pulse">LOCATING...</span>}
+                            <button onClick={() => toggleInfo('gps')}><Info className={`w-4 h-4 ${textMutedClass}`} /></button>
+                        </div>
                     </div>
+
+                    {showInfo === 'gps' && (
+                        <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
+                            Speed, Altitude (WGS84), and Climb Rate derived from GPS coordinates.
+                        </div>
+                    )}
 
                     <div className="grid grid-cols-3 gap-2 text-center mb-4">
                         <div>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>SPEED</p>
-                            <p className={`text - 2xl font - black ${ textClass } `}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>SPEED</p>
+                            <p className={`text-2xl font-black ${textClass}`}>
                                 {sensors.gps.speed ? (isMetric ? (sensors.gps.speed * 3.6).toFixed(1) : (sensors.gps.speed * 2.23694).toFixed(1)) : '0.0'}
                             </p>
                             <span className="text-[10px] text-gray-400">{isMetric ? 'km/h' : 'mph'}</span>
                         </div>
                         <div>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>ALTITUDE</p>
-                            <p className={`text - 2xl font - black ${ textClass } `}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>ALTITUDE</p>
+                            <p className={`text-2xl font-black ${textClass}`}>
                                 {sensors.gps.altitude ? (isMetric ? sensors.gps.altitude.toFixed(0) : (sensors.gps.altitude * 3.28084).toFixed(0)) : '0'}
                             </p>
                             <span className="text-[10px] text-gray-400">{isMetric ? 'm' : 'ft'}</span>
                         </div>
-                         <div>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>CLIMB RATE</p>
-                            <div className={`flex items - center justify - center gap - 1 ${ Math.abs(sensors.environment.verticalSpeed) > 0.5 ? 'text-blue-500' : textClass } `}>
-                                <p className={`text - 2xl font - black`}>
+                        <div>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>CLIMB</p>
+                            <div className={`flex items-center justify-center gap-1 ${Math.abs(sensors.environment.verticalSpeed) > 0.5 ? 'text-blue-500' : textClass}`}>
+                                <p className={`text-2xl font-black`}>
                                     {isMetric ? sensors.environment.verticalSpeed.toFixed(1) : (sensors.environment.verticalSpeed * 196.85).toFixed(0)}
                                 </p>
                                 {sensors.environment.verticalSpeed > 0.5 && <ArrowUp className="w-4 h-4" />}
@@ -294,86 +376,121 @@ const SensorMonitor = () => {
                             <span className="text-[10px] text-gray-400">{isMetric ? 'm/s' : 'fpm'}</span>
                         </div>
                     </div>
-                     <div className={`p - 2 rounded ${ isDark ? 'bg-gray-900 bg-opacity-50' : 'bg-gray-50' } text - center`}>
+                    <div className={`p-2 rounded ${isDark ? 'bg-gray-900 bg-opacity-50' : 'bg-gray-50'} text-center`}>
                         <div className="grid grid-cols-2 gap-4">
-                             <div>
+                            <div>
                                 <p className="text-[10px] text-gray-400">LATITUDE</p>
-                                <p className={`font - mono text - gray - 500 font - bold`}>{sensors.gps.latitude ? sensors.gps.latitude.toFixed(6) : '...'}</p>
-                             </div>
-                             <div>
+                                <p className={`font-mono text-gray-500 font-bold`}>{sensors.gps.latitude ? sensors.gps.latitude.toFixed(6) : '...'}</p>
+                            </div>
+                            <div>
                                 <p className="text-[10px] text-gray-400">LONGITUDE</p>
-                                <p className={`font - mono text - gray - 500 font - bold`}>{sensors.gps.longitude ? sensors.gps.longitude.toFixed(6) : '...'}</p>
-                             </div>
+                                <p className={`font-mono text-gray-500 font-bold`}>{sensors.gps.longitude ? sensors.gps.longitude.toFixed(6) : '...'}</p>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                {/* 3. COMPASS */}
-                <div className={`${ cardClass } rounded - lg shadow - sm p - 4 border ${ borderClass } `}>
+                {/* 3. COMPASS + MAGNETOMETER */}
+                <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
                             <Navigation className="w-5 h-5 text-purple-500" />
-                            <h2 className={`font - bold ${ textClass } `}>COMPASS</h2>
+                            <h2 className={`font-bold ${textClass}`}>COMPASS</h2>
+                        </div>
+                        <button onClick={() => toggleInfo('mag')}><Info className={`w-4 h-4 ${textMutedClass}`} /></button>
+                    </div>
+
+                    {showInfo === 'mag' && (
+                        <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
+                            Heading (North) and Magnetic Flux Density (EMF) if supported by hardware (Android).
+                        </div>
+                    )}
+
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <p className={`text-4xl font-black ${textClass}`}>{Math.round(sensors.magnetometer.heading)}°</p>
+                            <p className={`text-lg font-bold text-purple-500 mt-1`}>{getCompassDirection(sensors.magnetometer.heading)}</p>
+                        </div>
+                        <div className="relative w-16 h-16 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
+                            <div className="absolute w-1 h-8 bg-purple-500 top-1/2 left-1/2 origin-bottom transform -translate-x-1/2 -translate-y-full rounded-full transition-transform duration-200" style={{ transform: `translateX(-50%) translateY(-100%) rotate(${sensors.magnetometer.heading}deg)` }}></div>
                         </div>
                     </div>
-                    <div className="flex items-center justify-between">
-                         <div>
-                            <p className={`text - 4xl font - black ${ textClass } `}>{Math.round(sensors.magnetometer.heading)}°</p>
-                            <p className={`text - lg font - bold text - purple - 500 mt - 1`}>{getCompassDirection(sensors.magnetometer.heading)}</p>
-                         </div>
-                         <div className="relative w-16 h-16 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
-                            <div className="absolute w-1 h-8 bg-purple-500 top-1/2 left-1/2 origin-bottom transform -translate-x-1/2 -translate-y-full rounded-full transition-transform duration-200" style={{ transform: `translateX(-50 %) translateY(-100 %) rotate(${ sensors.magnetometer.heading }deg)`}}></div>
-                         </div>
+
+                    {/* EMF / uT Section */}
+                    <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                                <Zap className="w-4 h-4 text-yellow-500" />
+                                <span className={`text-xs ${textMutedClass}`}>MAGNETIC FIELD (EMF)</span>
+                            </div>
+                            <div className="text-right">
+                                <span className={`text-lg font-bold ${textClass}`}>{sensors.magnetometer.uT ? sensors.magnetometer.uT.toFixed(1) : '--'}</span>
+                                <span className="text-xs text-gray-400 ml-1">µT</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                {/* 4. ENVIRONMENT (Sound & Calculated) */}
-                <div className={`${ cardClass } rounded - lg shadow - sm p - 4 border ${ borderClass } `}>
+                {/* 4. ENVIRONMENT */}
+                <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <Gauge className="w-5 h-5 text-cyan-500" />
-                        <h2 className={`font - bold ${ textClass } `}>ENVIRONMENT (DERIVED)</h2>
-                        <span className="text-[10px] text-gray-400 ml-auto border border-gray-500 px-1 rounded">CALCULATED</span>
+                        <h2 className={`font-bold ${textClass}`}>ENVIRONMENT</h2>
+                        <button onClick={() => toggleInfo('env')} className="ml-auto"><Info className={`w-4 h-4 ${textMutedClass}`} /></button>
                     </div>
 
+                    {showInfo === 'env' && (
+                        <div className={`mb-3 p-2 rounded text-xs ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-blue-50 text-blue-800'}`}>
+                            Pressure/Density calculated from Altitude. Noise from Mic. Light (Lux) from Ambient sensor (Android).
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-3 mb-3">
-                         {/* Sound Meter */}
-                         <div className={`p - 2 rounded ${ isDark ? 'bg-gray-700' : 'bg-gray-50' } `}>
+                        {/* Sound Meter */}
+                        <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
                             <div className="flex items-center gap-1 mb-1">
-                                <Mic className={`w - 3 h - 3 ${ sensors.available.mic ? 'text-red-500 animate-pulse' : 'text-gray-400' } `} /> 
-                                <p className={`text - xs ${ textMutedClass } `}>NOISE LEVEL</p>
+                                <Mic className={`w-3 h-3 ${sensors.available.mic ? 'text-red-500 animate-pulse' : 'text-gray-400'}`} />
+                                <p className={`text-xs ${textMutedClass}`}>NOISE</p>
                             </div>
-                            <p className={`text - lg font - bold ${ textClass } `}>
+                            <p className={`text-lg font-bold ${textClass}`}>
                                 {sensors.available.mic ? sensors.environment.soundDb : '--'} <span className="text-xs font-normal">dB</span>
                             </p>
-                         </div>
-                         {/* Air Density */}
-                         <div className={`p - 2 rounded ${ isDark ? 'bg-gray-700' : 'bg-gray-50' } `}>
-                            <p className={`text - xs ${ textMutedClass } mb - 1`}>AIR DENSITY</p>
-                            <p className={`text - lg font - bold ${ textClass } `}>
+                        </div>
+                        {/* Air Density */}
+                        <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>DENSITY</p>
+                            <p className={`text-lg font-bold ${textClass}`}>
                                 {getAirDensity()} <span className="text-xs font-normal">kg/m³</span>
                             </p>
-                         </div>
+                        </div>
                     </div>
-                    
-                    <div className="flex justify-between items-center bg-opacity-50 p-2 rounded bg-gray-50 dark:bg-gray-900">
-                         <span className={`text - xs ${ textMutedClass } `}>PRESSURE (ISA)</span>
-                         <span className={`text - sm font - bold ${ textClass } `}>{getPressurePSI()} PSI</span>
+
+                    {/* Light / PSI Row */}
+                    <div className="grid grid-cols-2 gap-3">
+                        <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>LIGHT</p>
+                            <p className={`text-gray-400 text-xs italic`}>{sensors.available.light ? sensors.environment.lux + ' lux' : 'N/A'}</p>
+                        </div>
+                        <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                            <p className={`text-xs ${textMutedClass} mb-1`}>PRESSURE</p>
+                            <p className={`text-sm font-bold ${textClass}`}>{getPressurePSI()} PSI</p>
+                        </div>
                     </div>
                 </div>
 
             </div>
-            
+
             {/* Elegant Footer */}
             <div className="mt-8 mb-4 text-center border-t border-gray-200 dark:border-gray-800 pt-4">
-                <p className={`text - [10px] ${ textMutedClass } mb - 2`}>
-                    Sensor readings are estimates dependent on device hardware. <br/>
-                    Some data is derived from GPS altitude and standard atmospheric models.
+                <p className={`text-[10px] ${textMutedClass} mb-2`}>
+                    Data accuracy depends on device hardware.<br />
+                    EMF/Light sensors require Android/Chrome support.
                 </p>
-                <a 
-                    href="http://yepzhi.com" 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className={`inline - flex items - center gap - 1 text - xs font - bold ${ isDark ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-black' } transition - colors duration - 200 uppercase tracking - widest`}
+                <a
+                    href="http://yepzhi.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`inline-flex items-center gap-1 text-xs font-bold ${isDark ? 'text-gray-300 hover:text-white' : 'text-gray-600 hover:text-black'} transition-colors duration-200 uppercase tracking-widest`}
                     style={{ letterSpacing: '0.15em' }}
                 >
                     Developed by Yepzhi
@@ -384,4 +501,3 @@ const SensorMonitor = () => {
 };
 
 export default SensorMonitor;
-```
