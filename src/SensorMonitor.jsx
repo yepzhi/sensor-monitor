@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Activity, Navigation, RotateCcw, Info, Moon, MapPin, Gauge, Mic, ArrowUp, ArrowDown, Zap, Waves } from 'lucide-react';
+import { Activity, Navigation, RotateCcw, Info, Moon, MapPin, Gauge, Mic, ArrowUp, ArrowDown } from 'lucide-react';
 
 const SensorMonitor = () => {
     const [time, setTime] = useState(new Date());
@@ -21,35 +21,26 @@ const SensorMonitor = () => {
             x: 0, y: 0, z: 0,
             totalG: 0,
             peakG: 0,
-            vibration: 0 // New vibration index
+            vibration: 0
         },
-        magnetometer: {
-            heading: 0,
-            accuracy: 0,
-            uT: null // Microteslas (EMF)
-        },
+        magnetometer: { heading: 0, accuracy: 0 },
         environment: {
             verticalSpeed: 0,
             pressureHPa: 1013.25,
-            isBarometerReal: false, // Track if using real or derived
             soundDb: 0,
-            lux: null // Ambient Light
+            lux: null
         },
         available: {
             gps: false,
             motion: false,
             orientation: false,
             mic: false,
-            magnetometer: false, // For direct uT reading
-            barometer: false,
             light: false
         }
     });
 
     const lastGpsRef = useRef({ alt: null, time: null });
     const audioContextRef = useRef(null);
-    const magSensorRef = useRef(null); // Reference for Generic Sensor API Magnetometer
-    const lightSensorRef = useRef(null); // Ref for Light Sensor
 
     // --- Helpers ---
     const calculatePressureFromAlt = (altMeters) => {
@@ -100,49 +91,6 @@ const SensorMonitor = () => {
             initAudio(stream);
         } catch (e) {
             console.warn("Mic access denied", e);
-        }
-
-        // 3. Generic Sensors (Android Chrome usually)
-        initGenericSensors();
-    };
-
-    const initGenericSensors = () => {
-        // Magnetometer (Real EMF)
-        if ('Magnetometer' in window) {
-            try {
-                const MagnetometerClass = window['Magnetometer'];
-                const mag = new MagnetometerClass({ frequency: 10 });
-                mag.addEventListener('reading', () => {
-                    const x = mag.x, y = mag.y, z = mag.z;
-                    const totaluT = Math.sqrt(x * x + y * y + z * z);
-                    setSensors(prev => ({
-                        ...prev,
-                        magnetometer: { ...prev.magnetometer, uT: totaluT },
-                        available: { ...prev.available, magnetometer: true }
-                    }));
-                });
-                mag.start();
-                magSensorRef.current = mag;
-            } catch (error) {
-                console.log("Magnetometer not supported/allowed", error);
-            }
-        }
-
-        // Ambient Light
-        if ('AmbientLightSensor' in window) {
-            try {
-                const AmbientLightSensorClass = window['AmbientLightSensor'];
-                const light = new AmbientLightSensorClass();
-                light.addEventListener('reading', () => {
-                    setSensors(prev => ({
-                        ...prev,
-                        environment: { ...prev.environment, lux: light.illuminance },
-                        available: { ...prev.available, light: true }
-                    }));
-                });
-                light.start();
-                lightSensorRef.current = light;
-            } catch (err) { console.log("Light sensor error", err); }
         }
     };
 
@@ -234,8 +182,6 @@ const SensorMonitor = () => {
             }
             lastGpsRef.current = { alt: alt, time: now };
 
-            // Only use calculated if we don't have a real barometer (Generic Sensor API Barometer is very rare, so assuming calculated for now unless I add PressureObserver logic which is extremely experimental)
-            // For now, on Android, standard is usually simulated pressure from GPS too unless using native app.
             const press = calculatePressureFromAlt(alt);
 
             setSensors(prev => ({
@@ -243,7 +189,7 @@ const SensorMonitor = () => {
                 gps: { latitude, longitude, altitude: alt, accuracy, speed: speed || 0, heading },
                 environment: {
                     ...prev.environment,
-                    pressureHPa: press, // Use calculated for consistency across web
+                    pressureHPa: press,
                     verticalSpeed: vSpeed
                 },
                 available: { ...prev.available, gps: true }
@@ -330,7 +276,7 @@ const SensorMonitor = () => {
                         <div className={`text-center p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
                             <p className={`text-xs ${textMutedClass} mb-1`}>VIBRATION</p>
                             <div className="flex justify-center items-center gap-1">
-                                <Waves className={`w-4 h-4 ${sensors.accelerometer.vibration > 0.5 ? 'text-orange-500 animate-pulse' : 'text-gray-400'}`} />
+                                <Activity className={`w-4 h-4 ${sensors.accelerometer.vibration > 0.5 ? 'text-orange-500 animate-pulse' : 'text-gray-400'}`} />
                                 <p className={`text-xl font-black ${textClass}`}>{sensors.accelerometer.vibration.toFixed(1)}</p>
                             </div>
                         </div>
@@ -397,7 +343,7 @@ const SensorMonitor = () => {
                     </div>
                 </div>
 
-                {/* 3. COMPASS + MAGNETOMETER */}
+                {/* 3. COMPASS */}
                 <div className={`${cardClass} rounded-lg shadow-sm p-4 border ${borderClass}`}>
                     <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-100 dark:border-gray-700">
                         <div className="flex items-center gap-2">
@@ -420,20 +366,6 @@ const SensorMonitor = () => {
                         </div>
                         <div className="relative w-16 h-16 border-2 border-gray-300 dark:border-gray-600 rounded-full flex items-center justify-center">
                             <div className="absolute w-1 h-8 bg-purple-500 top-1/2 left-1/2 origin-bottom transform -translate-x-1/2 -translate-y-full rounded-full transition-transform duration-200" style={{ transform: `translateX(-50%) translateY(-100%) rotate(${sensors.magnetometer.heading}deg)` }}></div>
-                        </div>
-                    </div>
-
-                    {/* EMF / uT Section */}
-                    <div className={`p-2 rounded ${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
-                        <div className="flex justify-between items-center">
-                            <div className="flex items-center gap-2">
-                                <Zap className="w-4 h-4 text-yellow-500" />
-                                <span className={`text-xs ${textMutedClass}`}>MAGNETIC FIELD (EMF)</span>
-                            </div>
-                            <div className="text-right">
-                                <span className={`text-lg font-bold ${textClass}`}>{sensors.magnetometer.uT ? sensors.magnetometer.uT.toFixed(1) : '--'}</span>
-                                <span className="text-xs text-gray-400 ml-1">µT</span>
-                            </div>
                         </div>
                     </div>
                 </div>
