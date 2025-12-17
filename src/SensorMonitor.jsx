@@ -92,6 +92,47 @@ const SensorMonitor = () => {
         } catch (e) {
             console.warn("Mic access denied", e);
         }
+
+        // 3. Generic Sensors (Android Chrome usually)
+        initGenericSensors();
+    };
+
+    const initGenericSensors = () => {
+        // Magnetometer (Real EMF)
+        if ('Magnetometer' in window) {
+            try {
+                const MagnetometerClass = window['Magnetometer'];
+                const mag = new MagnetometerClass({ frequency: 10 });
+                mag.addEventListener('reading', () => {
+                    const x = mag.x, y = mag.y, z = mag.z;
+                    const totaluT = Math.sqrt(x * x + y * y + z * z);
+                    setSensors(prev => ({
+                        ...prev,
+                        magnetometer: { ...prev.magnetometer, uT: totaluT },
+                        available: { ...prev.available, magnetometer: true }
+                    }));
+                });
+                mag.start();
+            } catch (error) {
+                console.log("Magnetometer not supported/allowed", error);
+            }
+        }
+
+        // Ambient Light
+        if ('AmbientLightSensor' in window) {
+            try {
+                const AmbientLightSensorClass = window['AmbientLightSensor'];
+                const light = new AmbientLightSensorClass();
+                light.addEventListener('reading', () => {
+                    setSensors(prev => ({
+                        ...prev,
+                        environment: { ...prev.environment, lux: light.illuminance },
+                        available: { ...prev.available, light: true }
+                    }));
+                });
+                light.start();
+            } catch (err) { console.log("Light sensor error", err); }
+        }
     };
 
     const initAudio = (stream) => {
